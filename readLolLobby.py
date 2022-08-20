@@ -342,10 +342,22 @@ def preprocessImg(img, threshold = 150):
     img2 = cv2.copyMakeBorder(img, 10,5,10,5, borderType=cv2.BORDER_CONSTANT, value=0)
     img2 = cv2.equalizeHist(img2)
     img2 = cv2.bilateralFilter(img2,4,25, 25)
-    img2 = cv2.resize(img2, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    img2 = cv2.resize(img2, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     img2 = cv2.GaussianBlur(img2, (3, 3), 0)
     img2 = cv2.equalizeHist(img2)
     img2 = 255 - img2
+    _,img2 = cv2.threshold(img2,150,255,cv2.THRESH_BINARY)
+
+    return img2
+
+
+def preprocessImg2(img):
+    img2 = cv2.copyMakeBorder(img, 5,5,5,5, borderType=cv2.BORDER_CONSTANT, value=255)
+    img2 = cv2.equalizeHist(img2)
+    img2 = cv2.bilateralFilter(img2,4,25, 25)
+    img2 = cv2.resize(img2, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    img2 = cv2.GaussianBlur(img2, (3, 3), 0)
+    img2 = cv2.equalizeHist(img2)
     _,img2 = cv2.threshold(img2,150,255,cv2.THRESH_BINARY)
 
     return img2
@@ -355,14 +367,17 @@ if __name__ == '__main__':
     # arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
     # image = cv2.cvtColor(cv2.imdecode(arr, -1), cv2.COLOR_BGR2RGB)
     # cv2.imwrite(f"./output/Item.png", image)
-    image = cv2.cvtColor(cv2.imread(f'ReadLolLobby/input/FZkWYF1XwAA5pda.jpg'), cv2.COLOR_BGR2RGB)
+    image = cv2.cvtColor(cv2.imread(f'./input/img4.jpg'), cv2.COLOR_BGR2RGB)
     #crop left part (0 -> start of players stats)
     image = cropLeftPart(image)
+    cv2.imwrite(f"./output/1.png", image)
     #Crop the friends list (if exists)
     image = cropFriendList(image)
+    cv2.imwrite(f"./output/2.png", image)
     #Crop the top (victory - defeat) and bottom (play again) part (if they exist)
     image, victoryImage = cropTopBottom(image) #image is only the part of the players now
-    
+    cv2.imwrite(f"./output/3.png", image)
+
     #if error
     if(len(image) == None):
         raise ValueError('Something went wrong')
@@ -395,6 +410,7 @@ if __name__ == '__main__':
         username_image = playerRow[0:int(playerRow.shape[0] * 0.5), x_username:x_username+w_username]
         username_image = preprocessImg(username_image)
         player.username = readTextUsernameAndChampion(username_image).replace("\n", "")
+        cv2.imwrite(f"./output/Item{i}_username.png", username_image)
 
         champion_image = playerRow[int(playerRow.shape[0] * 0.5):, x_username:x_username+w_username]
         champion_image = preprocessImg(champion_image, 75)
@@ -430,14 +446,24 @@ if __name__ == '__main__':
             x_digit, y_digit, w_digit, h_digit = cv2.boundingRect(cnt)
             img_digit = kda_image[y_digit:y_digit+h_digit, x_digit:x_digit+w_digit]
             #add border to the digit to make it easier to read
-            img_digit = cv2.copyMakeBorder(img_digit, 5,5,5,5, borderType=cv2.BORDER_CONSTANT, value=255)
+            # img_digit = cv2.copyMakeBorder(img_digit, 5,5,5,5, borderType=cv2.BORDER_CONSTANT, value=255)
+            img_digit = preprocessImg2(img_digit)
             cv2.imwrite(f"./output/Item_{i}_digit.png", img_digit)
             character = readSingleDigit(img_digit)
             kda_string += character[0] if character != '' and character is not None else '/'
         
+        kda_string2 = kda_string
         #it does not have exactly 2 / it means that there is an error in our data, so we read the whole text
-        if(kda_string.count('/') != 2):
+        if(kda_string.count('/') != 2 ):
             kda_string = readKDA(kda_image).replace("\n", "")
+
+        kda_split = kda_string.split('/')
+        if(len(kda_split[0]) == 0):
+            kda_split[0] = kda_string2.split('/')[0]
+        if(len(kda_split[-1]) == 0):
+            kda_split[-1] = kda_string2.split('/')[-1]
+        
+        kda_string = '/'.join(kda_split)
 
         player.kda = kda_string
         players.append(player.toJson())
