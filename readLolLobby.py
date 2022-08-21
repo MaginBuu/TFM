@@ -4,6 +4,8 @@ from os import walk, remove
 import pytesseract
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
 import urllib.request
+import requests
+import difflib
 
 class Player:
     def __init__(self):
@@ -362,6 +364,23 @@ def preprocessImg2(img):
 
     return img2
 
+
+def getChampions():
+    versions = requests.get('https://ddragon.leagueoflegends.com/api/versions.json')
+    champions_array = []
+    if(versions.status_code == 200):
+        latest_version = versions.json()[0]
+        champions = requests.get('https://ddragon.leagueoflegends.com/cdn/' + latest_version + '/data/en_US/champion.json')
+        if(champions.status_code == 200):
+            for champion in champions.json()['data']:
+                champions_array.append(champions.json()['data'][champion]['name'])
+        else:
+            raise ValueError('Something went wrong')    
+    else:
+        raise ValueError('Something went wrong')  
+
+    return champions_array
+
 if __name__ == '__main__':
     # req = urllib.request.urlopen('https://storage.googleapis.com/esportslink-imges/posts/IMG2.png')
     # arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
@@ -396,6 +415,7 @@ if __name__ == '__main__':
     x_kda, y_kda, w_kda, h_kda = getCoords(playerImages, 'kda', x_dmg - 5)
     roles = ['top', 'jungle', 'mid', 'adc', 'support']
     players = []
+    champions_array = getChampions()
 
     for playerRow in playerImages:
         player = Player()
@@ -414,7 +434,10 @@ if __name__ == '__main__':
 
         champion_image = playerRow[int(playerRow.shape[0] * 0.5):, x_username:x_username+w_username]
         champion_image = preprocessImg(champion_image, 75)
-        player.champion = readTextUsernameAndChampion(champion_image).replace("\n", "")
+        if(len(champions_array) > 0):
+            champion_name = readTextUsernameAndChampion(champion_image).replace("\n", "")
+            champion_search = difflib.get_close_matches(champion_name, champions_array)
+            player.champion = champion_search[0] if len(champion_search) > 0 else 'unknown'
 
 
         gold_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_gold - 5):(x_gold + w_gold + 5)]
