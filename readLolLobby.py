@@ -6,6 +6,12 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 import urllib.request
 import requests
 import difflib
+from keras.models import Sequential, load_model
+from keras.layers import Dense, Dropout, Flatten, Conv2D, BatchNormalization, Normalization, RandomRotation, RandomZoom
+from keras.utils import image_dataset_from_directory, img_to_array
+from keras.callbacks import LearningRateScheduler
+from os.path import exists
+from tensorflow import expand_dims
 
 class Player:
     def __init__(self):
@@ -22,6 +28,107 @@ class Player:
             'gold': self.gold,
         }
 
+
+class ReadDigitModel:
+    def __init__(self, modelPath = './models/readDigitModel.h5', epochs = 10, datasetPath = './digitDataset'):
+        
+        self.modelPath = modelPath if (modelPath != None and modelPath != '') else './models/readDigitModel.h5'
+        self.datasetPath = datasetPath
+
+        if(exists(self.modelPath)):
+            self.loadModel()
+        else:
+            self.epochs = epochs
+            self.createModel()
+            self.trainModel()
+            self.saveModel()
+            
+    def createModel(self):
+        model = Sequential()
+
+        model.add(Conv2D(32, kernel_size = 3, activation='relu', input_shape = (28, 28, 1)))
+        model.add(BatchNormalization())
+        model.add(Conv2D(32, kernel_size = 3, activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Conv2D(32, kernel_size = 5, strides=2, padding='same', activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(64, kernel_size = 3, activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Conv2D(64, kernel_size = 3, activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Conv2D(64, kernel_size = 5, strides=2, padding='same', activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(128, kernel_size = 4, activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Flatten())
+        model.add(Dropout(0.4))
+        model.add(Dense(11, activation='softmax'))
+
+        # COMPILE WITH ADAM OPTIMIZER AND CROSS ENTROPY COST
+        model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+
+        self.model = model
+
+    def trainModel(self):
+        train_ds = image_dataset_from_directory(
+                                                self.datasetPath,
+                                                labels='inferred',
+                                                color_mode='grayscale',
+                                                validation_split=0.2,
+                                                subset="training",
+                                                label_mode="categorical",
+                                                seed=42,
+                                                image_size=(28, 28),
+                                                batch_size=32)
+
+        val_ds = image_dataset_from_directory(
+                                            self.datasetPath,
+                                            labels='inferred',
+                                            color_mode='grayscale',
+                                            validation_split=0.2,
+                                            subset="validation",
+                                            label_mode="categorical",
+                                            seed=42,
+                                            image_size=(28, 28),
+                                            batch_size=32)
+
+        data_augmentation = Sequential([
+            Normalization(),
+            RandomRotation(0.1),
+            RandomZoom (0.1)
+        ])
+
+        train_ds = train_ds.map(
+                lambda x, y: (data_augmentation(x, training=True), y))
+            
+        val_ds = val_ds.map(
+                lambda x, y: (data_augmentation(x, training=True), y))
+
+        annealer = LearningRateScheduler(lambda x: 1e-3 * 0.95 ** x)
+
+        self.model.fit(train_ds, epochs=self.epochs, validation_data=val_ds, callbacks=[annealer])
+
+    def saveModel(self):
+        self.model.save(self.modelPath)
+
+    def loadModel(self):
+        self.model = load_model(self.modelPath)
+
+    def read(self, img):
+        img_array = img_to_array(img)
+        img_array = expand_dims(img_array, 0)  # Create batch axis
+        digit = int(np.argmax(self.model.predict(img_array, verbose = 0), axis=-1))
+        if(digit == 2):
+            digit = "/"
+        elif digit > 2:
+            digit -= 1
+        
+        return digit
+
 # DETECT THE RED VERTICAL LINE (ENEMY TEAM) AND CROP THE LEFT PART OF THE IMAGE
 def cropLeftPart(image):
     lower_red = np.array([170,50,50])
@@ -29,8 +136,11 @@ def cropLeftPart(image):
     img_hsl = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
     mask = cv2.inRange(img_hsl, lower_red, upper_red)
 
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2))
+    mask = cv2.dilate(mask, kernel, iterations=1)
+    
     # Detect vertical lines
-    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,25))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,20))
     detect_vertical = cv2.morphologyEx(mask, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
     cnts = cv2.findContours(detect_vertical, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = cnts[0] if len(cnts) == 2 else cnts[1]
@@ -352,15 +462,18 @@ def preprocessImg(img, threshold = 150):
 
     return img2
 
+#GET THE IMAGE IN A SHAPE OF 28x28 (ONLY WORKS WITH SINGLE DIGITS)
+def preprocessDigit(img):
+    padding_height_bot = 0 if img.shape[0] >= img.shape[1] else int((img.shape[1] - img.shape[0]) / 2)
+    padding_height_top = 0 if img.shape[0] >= img.shape[1] else int((img.shape[1] - img.shape[0]) / 2) + ((img.shape[1] - img.shape[0]) % 2)
+    padding_width_left = 0 if img.shape[1] >= img.shape[0] else int((img.shape[0] - img.shape[1]) / 2)
+    padding_width_right = 0 if img.shape[1] >= img.shape[0] else int((img.shape[0] - img.shape[1]) / 2) + ((img.shape[0] - img.shape[1]) % 2)
 
-def preprocessImg2(img):
-    img2 = cv2.copyMakeBorder(img, 5,5,5,5, borderType=cv2.BORDER_CONSTANT, value=255)
-    img2 = cv2.equalizeHist(img2)
-    img2 = cv2.bilateralFilter(img2,4,25, 25)
-    img2 = cv2.resize(img2, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    img2 = cv2.GaussianBlur(img2, (3, 3), 0)
-    img2 = cv2.equalizeHist(img2)
-    _,img2 = cv2.threshold(img2,150,255,cv2.THRESH_BINARY)
+    img2 = cv2.copyMakeBorder(img, padding_height_top, padding_height_bot, padding_width_right, padding_width_left, borderType=cv2.BORDER_CONSTANT, value=255)
+    img2 = cv2.resize(img2, (26, 26))
+
+    img2 = cv2.copyMakeBorder(img2, 1, 1, 1, 1, borderType=cv2.BORDER_CONSTANT, value=255)
+
 
     return img2
 
@@ -385,17 +498,14 @@ if __name__ == '__main__':
     # req = urllib.request.urlopen('https://storage.googleapis.com/esportslink-imges/posts/IMG2.png')
     # arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
     # image = cv2.cvtColor(cv2.imdecode(arr, -1), cv2.COLOR_BGR2RGB)
-    # cv2.imwrite(f"./output/Item.png", image)
+
     image = cv2.cvtColor(cv2.imread(f'./input/img4.jpg'), cv2.COLOR_BGR2RGB)
     #crop left part (0 -> start of players stats)
     image = cropLeftPart(image)
-    cv2.imwrite(f"./output/1.png", image)
     #Crop the friends list (if exists)
     image = cropFriendList(image)
-    cv2.imwrite(f"./output/2.png", image)
     #Crop the top (victory - defeat) and bottom (play again) part (if they exist)
     image, victoryImage = cropTopBottom(image) #image is only the part of the players now
-    cv2.imwrite(f"./output/3.png", image)
 
     #if error
     if(len(image) == None):
@@ -417,6 +527,8 @@ if __name__ == '__main__':
     players = []
     champions_array = getChampions()
 
+    digitModel = ReadDigitModel()
+
     for playerRow in playerImages:
         player = Player()
         player.role = roles[i]
@@ -430,7 +542,6 @@ if __name__ == '__main__':
         username_image = playerRow[0:int(playerRow.shape[0] * 0.5), x_username:x_username+w_username]
         username_image = preprocessImg(username_image)
         player.username = readTextUsernameAndChampion(username_image).replace("\n", "")
-        cv2.imwrite(f"./output/Item{i}_username.png", username_image)
 
         champion_image = playerRow[int(playerRow.shape[0] * 0.5):, x_username:x_username+w_username]
         champion_image = preprocessImg(champion_image, 75)
@@ -453,7 +564,6 @@ if __name__ == '__main__':
         #it fails, we read the whole text
         kda_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_kda - 5):(x_kda + w_kda + 5)]
         kda_image = preprocessImg(kda_image)
-        cv2.imwrite(f"./output/Item_{i}_kda.png", kda_image)
 
         #find each digit
         contours, hierarchy = cv2.findContours(kda_image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -469,11 +579,10 @@ if __name__ == '__main__':
             x_digit, y_digit, w_digit, h_digit = cv2.boundingRect(cnt)
             img_digit = kda_image[y_digit:y_digit+h_digit, x_digit:x_digit+w_digit]
             #add border to the digit to make it easier to read
-            # img_digit = cv2.copyMakeBorder(img_digit, 5,5,5,5, borderType=cv2.BORDER_CONSTANT, value=255)
-            img_digit = preprocessImg2(img_digit)
-            cv2.imwrite(f"./output/Item_{i}_digit.png", img_digit)
-            character = readSingleDigit(img_digit)
-            kda_string += character[0] if character != '' and character is not None else '/'
+            img_digit = preprocessDigit(img_digit)
+
+            digit = str(digitModel.read(img_digit))
+            kda_string += digit
         
         kda_string2 = kda_string
         #it does not have exactly 2 / it means that there is an error in our data, so we read the whole text
