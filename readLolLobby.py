@@ -571,7 +571,8 @@ if __name__ == '__main__':
             if(player.champion == 'unknown'):
                 champion_search = difflib.get_close_matches(champion_name, champions_ids)
                 player.champion = champions_array[champions_ids.index(champion_search[0])] if len(champion_search) > 0 else 'unknown'
-
+        else:
+            player.champion = champion_name
 
         gold_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_gold - 5):(x_gold + w_gold + 5)]
         gold_image = preprocessImg(gold_image)
