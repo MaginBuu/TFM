@@ -369,14 +369,15 @@ def getCoords(images, element, x_crop = None):
     
     coords = [] #coords of the element that we want to get
     x, y, w, h = 0, 0, 0, 0
+
+    thresh = 200 if (element == 'lvl' or element == 'username') else 175
     for image in images_cropped:
         #preprocess the image and dilate to get the text in one element when getting the contours
         image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        thresh = 225
         im_bw = cv2.threshold(image_gray, thresh, 255, cv2.THRESH_BINARY)[1]
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         dilate = cv2.dilate(im_bw, kernel, iterations=3)
-        
+
         cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cnts = cnts[0] if len(cnts) == 2 else cnts[1]
         #filter small contours
@@ -389,11 +390,23 @@ def getCoords(images, element, x_crop = None):
             cnts = sorted(cnts, key=lambda item1: item1[0][0][0], reverse=True)
 
         if(element == 'lvl' or element == 'username'):
+            
             if(len(cnts) > 2):
                 for i in range(0, 2):
                     x, y, w, h = cv2.boundingRect(cnts[i])
                     x2, y2, w2, h2 = cv2.boundingRect(cnts[i + 1])
-                    if(x2 - (x + w) > 50):
+
+                    if(element == 'username'):
+                        if(h > image.shape[0] * 0.75):
+                            continue
+                        elif(h2 > image.shape[0] * 0.75):
+                            break 
+                        elif(x + w > image.shape[1] * 0.4):
+                            break
+                        elif(w2 > w and x2 + w2 < image.shape[1] * 0.4):
+                            break
+
+                    if(x2 - (x + w) > 40):
                         break
                     else:
                         w += x2 - (x + w) + w2
@@ -413,6 +426,8 @@ def getCoords(images, element, x_crop = None):
         else:
             if(len(cnts) > 1):
                 x, y, w, h = cv2.boundingRect(cnts[0])
+                if(element == 'gold' and w - h < 5):
+                    x, y, w, h = cv2.boundingRect(cnts[1])
 
             else:
                 continue
@@ -421,11 +436,15 @@ def getCoords(images, element, x_crop = None):
 
     #get the coords that have at leat one coord close (looking x)
     i = 0
+    numImages = 0
     finalCoords = []
     for x, w in coords:
+        numImages = 0
         for y in range(i + 1, len(coords)):
             x2, w2 = coords[y]
-            if(abs(x - x2) < 30):
+            if(abs(x - x2) < 20):
+                numImages += 1
+            if(numImages == 5):
                 finalCoords.append([x, w])
                 break
         i += 1
@@ -449,12 +468,12 @@ def getCoords(images, element, x_crop = None):
 
 def preprocessImg(img, threshold = 150):
     img=cv2.cvtColor(img,cv2.COLOR_RGB2GRAY)
-    mask = img < threshold
-    img[mask] = 0
-    img2 = cv2.copyMakeBorder(img, 10,5,10,5, borderType=cv2.BORDER_CONSTANT, value=0)
+    img2 = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    mask = img2 < threshold
+    img2[mask] = 0
+    img2 = cv2.copyMakeBorder(img2, 10,5,10,5, borderType=cv2.BORDER_CONSTANT, value=0)
     img2 = cv2.equalizeHist(img2)
     img2 = cv2.bilateralFilter(img2,4,25, 25)
-    img2 = cv2.resize(img2, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     img2 = cv2.GaussianBlur(img2, (3, 3), 0)
     img2 = cv2.equalizeHist(img2)
     img2 = 255 - img2
@@ -477,29 +496,30 @@ def preprocessDigit(img):
 
     return img2
 
-
 def getChampions():
     versions = requests.get('https://ddragon.leagueoflegends.com/api/versions.json')
     champions_array = []
+    champions_ids = []
     if(versions.status_code == 200):
         latest_version = versions.json()[0]
         champions = requests.get('https://ddragon.leagueoflegends.com/cdn/' + latest_version + '/data/en_US/champion.json')
         if(champions.status_code == 200):
             for champion in champions.json()['data']:
                 champions_array.append(champions.json()['data'][champion]['name'])
+                champions_ids.append(champions.json()['data'][champion]['id'].lower())
         else:
             raise ValueError('Something went wrong')    
     else:
         raise ValueError('Something went wrong')  
 
-    return champions_array
+    return champions_array, champions_ids
 
 if __name__ == '__main__':
     # req = urllib.request.urlopen('https://storage.googleapis.com/esportslink-imges/posts/IMG2.png')
     # arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
     # image = cv2.cvtColor(cv2.imdecode(arr, -1), cv2.COLOR_BGR2RGB)
 
-    image = cv2.cvtColor(cv2.imread(f'./input/img4.jpg'), cv2.COLOR_BGR2RGB)
+    image = cv2.cvtColor(cv2.imread(f'./input/qDk7pOskEvoPBcubhJ0wis2V2kP1HL81IH4mUaAQ.jpg'), cv2.COLOR_BGR2RGB)
     #crop left part (0 -> start of players stats)
     image = cropLeftPart(image)
     #Crop the friends list (if exists)
@@ -525,10 +545,9 @@ if __name__ == '__main__':
     x_kda, y_kda, w_kda, h_kda = getCoords(playerImages, 'kda', x_dmg - 5)
     roles = ['top', 'jungle', 'mid', 'adc', 'support']
     players = []
-    champions_array = getChampions()
+    champions_array, champions_ids = getChampions()
 
     digitModel = ReadDigitModel()
-
     for playerRow in playerImages:
         player = Player()
         player.role = roles[i]
@@ -539,7 +558,7 @@ if __name__ == '__main__':
         player.lvl = readLvl(lvl_image).replace("\n", "")
 
         
-        username_image = playerRow[0:int(playerRow.shape[0] * 0.5), x_username:x_username+w_username]
+        username_image = playerRow[0:int(playerRow.shape[0] * 0.6), x_username:x_username+w_username]
         username_image = preprocessImg(username_image)
         player.username = readTextUsernameAndChampion(username_image).replace("\n", "")
 
@@ -549,6 +568,9 @@ if __name__ == '__main__':
             champion_name = readTextUsernameAndChampion(champion_image).replace("\n", "")
             champion_search = difflib.get_close_matches(champion_name, champions_array)
             player.champion = champion_search[0] if len(champion_search) > 0 else 'unknown'
+            if(player.champion == 'unknown'):
+                champion_search = difflib.get_close_matches(champion_name, champions_ids)
+                player.champion = champions_array[champions_ids.index(champion_search[0])] if len(champion_search) > 0 else 'unknown'
 
 
         gold_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_gold - 5):(x_gold + w_gold + 5)]
