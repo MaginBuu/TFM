@@ -137,8 +137,8 @@ def cropLeftPart(image):
     mask = cv2.inRange(img_hsl, lower_red, upper_red)
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2))
-    mask = cv2.dilate(mask, kernel, iterations=1)
-    
+    mask = cv2.dilate(mask, kernel, iterations=5)
+
     # Detect vertical lines
     vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,20))
     detect_vertical = cv2.morphologyEx(mask, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
@@ -151,7 +151,7 @@ def cropLeftPart(image):
     x, y, w, h = cv2.boundingRect(cnts[0])
     
     # crop the left part of the image
-    return image[:, x + w:]
+    return image[:, x + w:], y
 
 # DETECT IF THERE IS FRIENDLIST (DILATING THE IMAGE VERTICALLY AND SEARCHING FOR A SEPARATED PART) AND CROP IT
 def cropFriendList(image):
@@ -177,7 +177,7 @@ def cropFriendList(image):
     return image
 
 #DETECT IF THE IMAGE HAS TOP (VICTORY - DEFEAT) AND BOTTOM (PLAY AGAIN) AND CROP IT
-def cropTopBottom(image):
+def cropTopBottom(image, team2_y):
     image_enhanced = cv2.equalizeHist(cv2.cvtColor(image, cv2.COLOR_RGB2GRAY))
     thresh = 250
     im_bw = cv2.threshold(image_enhanced, thresh, 255, cv2.THRESH_BINARY)[1]
@@ -185,31 +185,46 @@ def cropTopBottom(image):
     #dilate the image horizontally to find the diferents rows (usually are the top part, players and bottom part)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 1))
     image_dilated = cv2.dilate(im_bw, kernel, iterations=100)
+    
     #dilate once vertically to avoid small parts
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3))
     image_dilated = cv2.dilate(image_dilated, kernel, iterations=1)
-
+    
     #find the different rows
     cnts = cv2.findContours(image_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = cnts[0] if len(cnts) == 2 else cnts[1]
     #filter small rows
     cnts = filter(lambda item: filterMinVertical(item, im_bw), cnts)
-    #sort from top to bottom
-    cnts = sorted(cnts, key=lambda item1: item1[0][0][1])
+    cnts = filter(lambda item: filterMinHorizontal(item), cnts)
 
     
+    #sort from top to bottom
+    cnts = sorted(cnts, key=lambda item1: item1[0][0][1])
+        
+
     top = None
     bottom = None
     if(len(cnts) > 0):
         foundTop = False
         foundBottom = False
         cnts2 = cnts[:]
+        numCntsTeam1 = len(list(filter(lambda item: filterTeam1(item, team2_y), cnts2)))
+
         victory_image = None
         #find the top player (if it has a lot of space between the countor and the previous one and is on the top of the image)
         while not foundTop:
+            if(numCntsTeam1 > 5):
+                cnts2.pop(0)
+                numCntsTeam1 -= 1
+                continue
             x, y, w, h = cv2.boundingRect(cnts2[0])
             x2, y2, w2, h2 = cv2.boundingRect(cnts2[1])
-            if(y2 - (y + h) > image.shape[0] / 20):
+            x3, y3, w3, h3 = cv2.boundingRect(cnts2[2])
+            if(abs((y3 - (y2 + h2)) - (y2 - (y + h))) < image.shape[0] / 40):
+                victory_image = image[0:y, :]
+                top = y
+                foundTop = True
+            elif((y2 - (y + h) > image.shape[0] / 20) and ((y3 - (y2 + h2)) <= (y2 - (y + h)))):
                 victory_image = image[0:y + h, :]
                 top = y2
                 foundTop = True
@@ -223,14 +238,24 @@ def cropTopBottom(image):
                 foundTop = True
 
         cnts2 = cnts[:]
+        numCntsTeam2 = len(list(filter(lambda item: filterTeam2(item, team2_y), cnts2)))
         #find the bottom player (if it has a lot of space between the countor and the previous one and is on the bottom of the image)
         while not foundBottom:
+            if(numCntsTeam2 > 5):
+                numCntsTeam2 -= 1
+                cnts2.pop(-1)
+                continue
+                
             x, y, w, h = cv2.boundingRect(cnts2[-1])
             x2, y2, w2, h2 = cv2.boundingRect(cnts2[-2])
-            if(y - (y2 + h2) > image.shape[0] / 20):
+            x3, y3, w3, h3 = cv2.boundingRect(cnts2[-3])
+            if (abs((y - (y2 + h2)) - (y2 - (y3 + h3))) < image.shape[0] / 40):
+                bottom = y + h
+                foundBottom = True
+            elif((y - (y2 + h2) > image.shape[0] / 20) and ((y - (y2 + h2)) >= (y2 - (y3 + h3)))):
                 bottom = y2 + h2
                 foundBottom = True
-            elif(y > image.shape[0] / 2):
+            elif(y < image.shape[0] * 0.75):
                 bottom = y + h
                 foundBottom = True
             else:
@@ -319,7 +344,26 @@ def filterVerticalRightSide(cnt, image):
 #ALL COUNTORNS HAVE TO BE HIGHER THAN THE IMAGE HEIGHT / 30
 def filterMinVertical(cnt, image):
     x, y, w, h = cv2.boundingRect(cnt)
-    if h > (image.shape[0] / 30):
+    if h > (image.shape[0] / 45):
+        return True
+    return False
+
+#ALL COUNTORNS HAVE TO BE TOUCHING LEFT OF SCREEN
+def filterMinHorizontal(cnt):
+    x, y, w, h = cv2.boundingRect(cnt)
+    return x < 10
+
+#GET ALL CONTOURNS THAT BELONG TO TEAM 1 (OR ABOVE)
+def filterTeam1(cnt, team2_y):
+    x, y, w, h = cv2.boundingRect(cnt)
+    if ((y < team2_y - 20) and ((y + h) < team2_y - 20)):
+        return True
+    return False
+
+#GET ALL CONTOURNS THAT BELONG TO TEAM2 (OR BELOW)
+def filterTeam2(cnt, team2_y):
+    x, y, w, h = cv2.boundingRect(cnt)
+    if y > team2_y - 20:
         return True
     return False
 
@@ -370,7 +414,7 @@ def getCoords(images, element, x_crop = None):
     coords = [] #coords of the element that we want to get
     x, y, w, h = 0, 0, 0, 0
 
-    thresh = 200 if (element == 'lvl' or element == 'username') else 175
+    thresh = 225 if (element == 'lvl' or element == 'username') else 175
     for image in images_cropped:
         #preprocess the image and dilate to get the text in one element when getting the contours
         image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -391,6 +435,9 @@ def getCoords(images, element, x_crop = None):
 
         if(element == 'lvl' or element == 'username'):
             
+            # figure(figsize=(100, 100), dpi=80)
+            # imgplot = plt.imshow(image, cmap='gray')
+            # plt.show()
             if(len(cnts) > 2):
                 for i in range(0, 2):
                     x, y, w, h = cv2.boundingRect(cnts[i])
@@ -426,12 +473,11 @@ def getCoords(images, element, x_crop = None):
         else:
             if(len(cnts) > 1):
                 x, y, w, h = cv2.boundingRect(cnts[0])
-                if(element == 'gold' and w - h < 5):
+                if(element == 'gold' and (w - h < 10 or w / h < 1.5 or h > image.shape[0] * 0.85)):
                     x, y, w, h = cv2.boundingRect(cnts[1])
-
             else:
                 continue
-
+            
         coords.append([x, w])
 
     #get the coords that have at leat one coord close (looking x)
@@ -514,18 +560,99 @@ def getChampions():
 
     return champions_array, champions_ids
 
+#GET KDA STRING FROM UNPROCESED IMG
+def getKDAFromImage(kda_image, digitModel):
+    #kda was not reading as good as the other ones, in this case we have divided into digits and read individually and if
+    #it fails, we read the whole text
+    kda_image = preprocessImg(kda_image)
+
+    #find each digit
+    contours, hierarchy = cv2.findContours(kda_image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = []
+    #check that is not a contour inside a digit
+    for y in range(len(contours)):
+        if hierarchy[0,y,3] == 0:
+            cnts.append(contours[y])
+    #sort from left to right
+    cnts = sorted(cnts, key=lambda item1: item1[0][0][0])
+    kda_string = ''
+    for cnt in cnts:
+        x_digit, y_digit, w_digit, h_digit = cv2.boundingRect(cnt)
+        img_digit = kda_image[y_digit:y_digit+h_digit, x_digit:x_digit+w_digit]
+        #add border to the digit to make it easier to read
+        img_digit = preprocessDigit(img_digit)
+
+        digit = str(digitModel.read(img_digit))
+        kda_string += digit
+    
+    kda_string2 = kda_string
+    #it does not have exactly 2 / it means that there is an error in our data, so we read the whole text
+    if(kda_string.count('/') != 2 ):
+        kda_string = readKDA(kda_image).replace("\n", "")
+
+    kda_split = kda_string.split('/')
+    if(len(kda_split[0]) == 0):
+        kda_split[0] = kda_string2.split('/')[0]
+    if(len(kda_split[-1]) == 0):
+        kda_split[-1] = kda_string2.split('/')[-1]
+    
+    kda_string = '/'.join(kda_split)
+    return kda_string
+
+#ALL COUNTORNS HAVE TO BE HIGHER THAN THE IMAGE HEIGHT / 30
+def filterNonDigits(cnt, cnts):
+    avg_h = sum(list(map(lambda temp_cnt: cv2.boundingRect(temp_cnt)[3], cnts))) / len(cnts)
+    avg_h *= 0.9
+
+    x, y, w, h = cv2.boundingRect(cnt)
+    if h > avg_h:
+        return True
+    return False
+
+#GET DMG/GOLD STRING FROM UNPROCESED IMG
+def getDmgGoldLvlFromImage(img, digitModel):
+    img = preprocessImg(img)
+
+    #find each digit
+    contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = []
+    #check that is not a contour inside a digit
+    for y in range(len(contours)):
+        if hierarchy[0,y,3] == 0:
+            cnts.append(contours[y])
+    cnts2 = list(cnts)
+
+    #kda and gold sometimes have non digits characters, delete them by filtering only the big cnts
+    cnts = filter(lambda item: filterNonDigits(item, cnts2), cnts)
+
+    #sort from left to right
+    cnts = sorted(cnts, key=lambda item1: item1[0][0][0])
+
+    return_string = ''
+    for cnt in cnts:
+        x_digit, y_digit, w_digit, h_digit = cv2.boundingRect(cnt)
+        img_digit = img[y_digit:y_digit+h_digit, x_digit:x_digit+w_digit]
+        #add border to the digit to make it easier to read
+        img_digit = preprocessDigit(img_digit)
+
+        digit = str(digitModel.read(img_digit))
+        return_string += digit
+
+    return return_string
+    
+
 if __name__ == '__main__':
     # req = urllib.request.urlopen('https://storage.googleapis.com/esportslink-imges/posts/IMG2.png')
     # arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
     # image = cv2.cvtColor(cv2.imdecode(arr, -1), cv2.COLOR_BGR2RGB)
 
-    image = cv2.cvtColor(cv2.imread(f'./input/qDk7pOskEvoPBcubhJ0wis2V2kP1HL81IH4mUaAQ.jpg'), cv2.COLOR_BGR2RGB)
+    image = cv2.cvtColor(cv2.imread(f'./input/d89pKUgVrma4B3UfO941GeKzro4jtBdGnzLVDY0i.png'), cv2.COLOR_BGR2RGB)
     #crop left part (0 -> start of players stats)
-    image = cropLeftPart(image)
+    image, team2_y = cropLeftPart(image)
     #Crop the friends list (if exists)
     image = cropFriendList(image)
     #Crop the top (victory - defeat) and bottom (play again) part (if they exist)
-    image, victoryImage = cropTopBottom(image) #image is only the part of the players now
+    image, victoryImage = cropTopBottom(image, team2_y) #image is only the part of the players now
 
     #if error
     if(len(image) == None):
@@ -551,12 +678,6 @@ if __name__ == '__main__':
     for playerRow in playerImages:
         player = Player()
         player.role = roles[i]
-
-        #crop the part of image that contains text and read it
-        lvl_image = playerRow[:, x_lvl:x_lvl+w_lvl] 
-        lvl_image = preprocessImg(lvl_image)
-        player.lvl = readLvl(lvl_image).replace("\n", "")
-
         
         username_image = playerRow[0:int(playerRow.shape[0] * 0.6), x_username:x_username+w_username]
         username_image = preprocessImg(username_image)
@@ -574,53 +695,14 @@ if __name__ == '__main__':
         else:
             player.champion = champion_name
 
-        gold_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_gold - 5):(x_gold + w_gold + 5)]
-        gold_image = preprocessImg(gold_image)
-        player.gold = readGoldAndDmg(gold_image).replace("\n", "")
+        player.lvl = getDmgGoldLvlFromImage(playerRow[:, x_lvl:x_lvl+w_lvl], digitModel)
 
-        dmg_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_dmg - 5):(x_dmg + w_dmg + 5)]
-        dmg_image = preprocessImg(dmg_image)
-        player.dmg = readGoldAndDmg(dmg_image).replace("\n", "")
+        player.gold = getDmgGoldLvlFromImage(playerRow[0:int(playerRow.shape[0] * 0.55), (x_gold - 5):(x_gold + w_gold + 5)], digitModel)
 
+        player.dmg = getDmgGoldLvlFromImage(playerRow[0:int(playerRow.shape[0] * 0.55), (x_dmg - 5):(x_dmg + w_dmg + 5)], digitModel)
 
-        #kda was not reading as good as the other ones, in this case we have divided into digits and read individually and if
-        #it fails, we read the whole text
-        kda_image = playerRow[0:int(playerRow.shape[0] * 0.55), (x_kda - 5):(x_kda + w_kda + 5)]
-        kda_image = preprocessImg(kda_image)
-
-        #find each digit
-        contours, hierarchy = cv2.findContours(kda_image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = []
-        #check that is not a contour inside a digit
-        for y in range(len(contours)):
-            if hierarchy[0,y,3] == 0:
-                cnts.append(contours[y])
-        #sort from left to right
-        cnts = sorted(cnts, key=lambda item1: item1[0][0][0])
-        kda_string = ''
-        for cnt in cnts:
-            x_digit, y_digit, w_digit, h_digit = cv2.boundingRect(cnt)
-            img_digit = kda_image[y_digit:y_digit+h_digit, x_digit:x_digit+w_digit]
-            #add border to the digit to make it easier to read
-            img_digit = preprocessDigit(img_digit)
-
-            digit = str(digitModel.read(img_digit))
-            kda_string += digit
+        player.kda = getKDAFromImage(playerRow[0:int(playerRow.shape[0] * 0.55), (x_kda - 5):(x_kda + w_kda + 5)], digitModel)
         
-        kda_string2 = kda_string
-        #it does not have exactly 2 / it means that there is an error in our data, so we read the whole text
-        if(kda_string.count('/') != 2 ):
-            kda_string = readKDA(kda_image).replace("\n", "")
-
-        kda_split = kda_string.split('/')
-        if(len(kda_split[0]) == 0):
-            kda_split[0] = kda_string2.split('/')[0]
-        if(len(kda_split[-1]) == 0):
-            kda_split[-1] = kda_string2.split('/')[-1]
-        
-        kda_string = '/'.join(kda_split)
-
-        player.kda = kda_string
         players.append(player.toJson())
         
         i += 1
